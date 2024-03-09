@@ -9,7 +9,8 @@
 ////////////////////////////////////
 int R, G, B;
 float setR,setG,setB;
-boolean test;
+boolean updateFromApple=false;
+boolean test =false;
 
 struct DEV_RgbLED : Service::LightBulb {       // RGB LED (Command Cathode)
 
@@ -101,7 +102,7 @@ struct DEV_RgbLED : Service::LightBulb {       // RGB LED (Command Cathode)
     redPin->set(R);                      // update each ledPin with new values
     greenPin->set(G);    
     bluePin->set(B);    
-      
+    updateFromApple=true;
     return(true);                               // return true
   
   } // update
@@ -151,11 +152,13 @@ struct DEV_RgbLED : Service::LightBulb {       // RGB LED (Command Cathode)
 //////////////////////////////////
 
 int* getRGB() {
-  static int rgb[3]; // Static array to hold RGB values
+  static int rgb[4]; // Static array to hold RGB values
   // Assign RGB values to the array
   rgb[0] = R;
   rgb[1] = G;
   rgb[2] = B;
+  rgb[3] = updateFromApple;
+  updateFromApple=false;
   return rgb; // Return the array
 }
 

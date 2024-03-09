@@ -4,9 +4,12 @@
 #include "DEV_LED.h"
 #include <string>
 #include <cstring>
-#include <ESP32Firebase.h>
+#include <Arduino.h>
+#include <WiFi.h>
+#include <Firebase_ESP_Client.h>//Provide the token generation process info.
+#include "addons/TokenHelper.h"//Provide the RTDB payload printing info and other helper functions.
+#include "addons/RTDBHelper.h"
 #define EEPROM_SIZE 64
-
 #include <BLEDevice.h>
 #include <BLEServer.h>
 #include <BLEUtils.h>
@@ -14,8 +17,15 @@
 #define SERVICE_UUID "4fafc201-1fb5-459e-8fcc-c5c9c331914b"
 #define CHARACTERISTIC_UUID "beb5483e-36e1-4688-b7f5-ea07361b26a8"
 
-#define REFERENCE_URL "https://mqtt-rgb-led-flutter-app-default-rtdb.firebaseio.com/"  //Firebase project reference url
-Firebase firebase(REFERENCE_URL);
+// Insert Firebase project data
+#define API_KEY "AIzaSyANBNyjN7SUs67H3YgG1vsyHCG2I0ILh2w"
+#define DATABASE_URL "https://mqtt-rgb-led-flutter-app-default-rtdb.firebaseio.com/" 
+//Define Firebase Data object
+FirebaseData fbdo;
+FirebaseAuth auth;
+FirebaseConfig config;
+unsigned long sendDataPrevMillis = 0;
+bool signupOK = false;
 
 WiFiClient espClient;
 String userId="u2445";
@@ -34,9 +44,9 @@ const int ledPin = 2;
 const int modeAddr = 0;
 const int wifiAddr = 10;
 const int buttonPin = 23;  // Change this to the pin connected to your push button
-int red=0;
-int green=0;
-int blue=0;
+int red=-100;
+int green=-100;
+int blue=-100;
 int* rgbValues;
 int redFromApple; 
 int greenFromApple;
@@ -46,8 +56,6 @@ int greenFromFirebase;
 int blueFromFirebase;
 
 int modeIdx;
-bool buttonState;
-bool lastButtonState;
 
 void wifiTask();
 String generateMqttTopic();
@@ -85,6 +93,27 @@ class MyCallbacks : public BLECharacteristicCallbacks {
   }
 };
 
+void firebaseSetup(){
+   /* Assign the api key (required) */
+  config.api_key = API_KEY;
+  /* Assign the RTDB URL (required) */
+  config.database_url = DATABASE_URL;
+
+  /* Sign up */
+  if (Firebase.signUp(&config, &auth, "", "")) {
+    Serial.println("ok");
+    signupOK = true;
+  }
+  else {
+    Serial.printf("%s\n", config.signer.signupError.message.c_str());
+  }
+
+  /* Assign the callback function for the long running token generation task */
+  config.token_status_callback = tokenStatusCallback; //see addons/TokenHelper.h
+
+  Firebase.begin(&config, &auth);
+  Firebase.reconnectWiFi(true);
+}
 
 void setup() {
   Serial.begin(115200);
@@ -171,6 +200,7 @@ void wifiTask() {
         ESP.restart();
       } else {
         connectToApple();
+        firebaseSetup();
         delay(100);
       }
     }
@@ -227,8 +257,8 @@ bool wifiConnect(String ssid, String password) {
 
 void loop() {
   //Manage pairing button------------------------------
-  buttonState = false;
-  lastButtonState = false;
+  static bool buttonState = false;
+  static bool lastButtonState = false;
   // Read the current state of the button
   buttonState = digitalRead(buttonPin);
   // Check for button press
@@ -240,15 +270,39 @@ void loop() {
   }
   lastButtonState = buttonState;
 
-
   if (applePoll) {
     homeSpan.poll();
   }
 
   //Update RGB from custom app side-> set bulb color & update Apple-------------------
-  redFromFirebase = firebase.getInt("devices/device1/color/red");
-  greenFromFirebase = firebase.getInt("devices/device1/color/green");
-  blueFromFirebase = firebase.getInt("devices/device1/color/blue");
+  if (Firebase.ready() && signupOK) {
+    if (Firebase.RTDB.getInt(&fbdo, "devices/device2/color/red")) {
+      if (fbdo.dataType() == "int") {
+        redFromFirebase = fbdo.intData();
+      }
+    }
+    else {
+      Serial.println(fbdo.errorReason());
+    }
+
+    if (Firebase.RTDB.getInt(&fbdo, "devices/device2/color/green")) {
+      if (fbdo.dataType() == "int") {
+        greenFromFirebase = fbdo.intData();
+      }
+    }
+    else {
+      Serial.println(fbdo.errorReason());
+    }
+
+    if (Firebase.RTDB.getInt(&fbdo, "devices/device2/color/blue")) {
+      if (fbdo.dataType() == "int") {
+        blueFromFirebase = fbdo.intData();
+      }
+    }
+    else {
+      Serial.println(fbdo.errorReason());
+    }
+  }
 
   if((redFromFirebase!=red) || (greenFromFirebase!=green) || (blueFromFirebase!=blue)){
     updateRgbPins(redFromFirebase,greenFromFirebase,blueFromFirebase);
@@ -258,20 +312,25 @@ void loop() {
     red=redFromFirebase;
     green=greenFromFirebase;
     blue=blueFromFirebase;
+    Serial.print("led updated from firebase: "); Serial.print(red); Serial.print(","); Serial.print(green); Serial.print(","); Serial.println(blue);
   }
 
   //Update RGB from apple app side-> update firebase values----------------
   rgbValues = getRGB();
-  redFromApple=rgbValues[0];
-  greenFromApple=rgbValues[1];
-  blueFromApple=rgbValues[2];
+  if(rgbValues[3]){
+    redFromApple=rgbValues[0];
+    greenFromApple=rgbValues[1];
+    blueFromApple=rgbValues[2];
 
-  if((red!=redFromApple) || (green!=greenFromApple) || (blue!=blueFromApple)){
+    if((red!=redFromApple) || (green!=greenFromApple) || (blue!=blueFromApple)){
       red=redFromApple;
       green=greenFromApple;
       blue=blueFromApple;
-      firebase.pushInt("devices/device1/color/red", red);
-      firebase.pushInt("devices/device1/color/green", green);
-      firebase.pushInt("devices/device1/color/blue", blue);
+      Firebase.RTDB.setInt(&fbdo, F("devices/device2/color/red"), redFromApple);
+      Firebase.RTDB.setInt(&fbdo, F("devices/device2/color/green"), greenFromApple);
+      Firebase.RTDB.setInt(&fbdo, F("devices/device2/color/blue"), blueFromApple);
+      Serial.print("led updated from apple: "); Serial.print(red); Serial.print(","); Serial.print(green); Serial.print(","); Serial.println(blue);
+    }
   }
+
 }
