@@ -1,7 +1,6 @@
 #include "EEPROM.h"
-#include "WiFi.h"
-#include "HomeSpan.h"
 #include "DEV_LED.h"
+#include "HomeSpan.h"
 #include <string>
 #include <cstring>
 #include <Arduino.h>
